@@ -3,6 +3,7 @@ package whip
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,6 +21,7 @@ import (
 	"github.com/livekit/protocol/rpc"
 	"github.com/livekit/protocol/utils"
 	"github.com/livekit/psrpc"
+	"github.com/pion/webrtc/v3"
 )
 
 const (
@@ -135,9 +137,37 @@ func (s *WHIPServer) Start(
 		}
 	}).Methods("DELETE")
 
-	// Trickle, ICE Restart unimplemented for now
+	// Trickle, ICE Restart
 	r.HandleFunc("/{app}/{stream_key}/{resource_id}", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotImplemented)
+		var err error
+		defer func() {
+			s.handleError(err, w)
+		}()
+
+		vars := mux.Vars(r)
+		resourceId := vars["resource_id"]
+
+		var candidate webrtc.ICECandidateInit
+		err = json.NewDecoder(r.Body).Decode(&candidate)
+		if err != nil {
+			return
+		}
+
+		s.handlersLock.Lock()
+		h, ok := s.handlers[resourceId]
+		s.handlersLock.Unlock()
+
+		if !ok {
+			return
+		}
+
+		err = h.pc.AddICECandidate(candidate)
+		if err != nil {
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/trickle-ice-sdpfrag")
+		w.WriteHeader(http.StatusCreated)
 	}).Methods("PATCH")
 
 	r.HandleFunc("/{app}/{stream_key}/{resource_id}", func(w http.ResponseWriter, r *http.Request) {
